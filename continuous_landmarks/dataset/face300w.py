@@ -1,17 +1,19 @@
 import numpy as np
-from pathlib import Path
 from PIL import Image
 import re
 from torch.utils.data import Dataset
 
+from .facescape import LANDMARKS_300W
+
 
 class Face300WDataset(Dataset):
-    def __init__(self, data_path, transform=None):
+    def __init__(self, data_path, canonical_shape, transform=None):
         self.data = [
             (p.parent / f'{p.stem}.png', parse_points(p))
             for p in data_path.glob('*/*.pts')
         ]
         self.transform = transform
+        self.canonical = canonical_shape[LANDMARKS_300W]
 
     def __len__(self):
         return len(self.data)
@@ -29,22 +31,22 @@ class Face300WDataset(Dataset):
 
 def parse_points(file_path):
     lines = file_path.read_text().split('\n')[:-1]
-    
+
     m_num_points = re.match(r'n_points: (\d+)', lines[1])
     assert m_num_points
     n_points = int(m_num_points.group(1))
-    
+
     assert lines[2] == '{'
     assert lines[-1] == '}'
-    
+
     points = []
-    
+
     for line in lines[3:-1]:
         x, y = line.split(' ')
         x = float(x)
         y = float(y)
         points.append([x, y])
-    
+
     assert len(points) == n_points
     return np.array(points)
 

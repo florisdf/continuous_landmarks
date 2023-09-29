@@ -1,17 +1,24 @@
 import numpy as np
-from pathlib import Path
 from PIL import Image
-import re
+import torch
 from torch.utils.data import Dataset
+
+from .facescape import LANDMARKS_300W
 
 
 class FITYMIDataset(Dataset):
-    def __init__(self, data_path, transform=None):
+    def __init__(self, data_path, canonical_shape, transform=None):
         self.data = [
-            (p.parent / f'{p.name.replace("_ldmks.txt", ".png")}', parse_points(p))
+            (p.parent / f'{p.name.replace("_ldmks.txt", ".png")}',
+             parse_points(p))
             for p in data_path.glob('*_ldmks.txt')
         ]
         self.transform = transform
+
+        canonical = canonical_shape[LANDMARKS_300W]
+        e0 = canonical_shape[LANDMARKS_300W[36:42]].mean(axis=0)
+        e1 = canonical_shape[LANDMARKS_300W[42:48]].mean(axis=0)
+        self.canonical = torch.cat([canonical, e0[None, ...], e1[None, ...]])
 
     def __len__(self):
         return len(self.data)

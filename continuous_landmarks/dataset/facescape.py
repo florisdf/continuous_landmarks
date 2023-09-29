@@ -10,14 +10,14 @@ import torch
 from torch.utils.data import Dataset
 
 
-LANDMARKS = [
+LANDMARKS_300W = np.array([
     23404, 4607, 4615, 4655, 20356, 4643, 5022, 5013, 1681, 1692, 11470, 10441,
     1336, 1343, 1303, 1295, 2372, 6143, 6141, 6126, 6113, 6109, 2844, 2762,
     2765, 2774, 2789, 6053, 6041, 1870, 1855, 4728, 4870, 1807, 1551, 1419,
     3434, 3414, 3447, 3457, 3309, 3373, 3179, 151, 127, 143, 3236, 47, 21018,
     4985, 4898, 6571, 1575, 1663, 1599, 1899, 12138, 5231, 21978, 5101, 21067,
     21239, 11378, 11369, 11553, 12048, 5212, 21892
-]
+])
 
 
 ImageParams = namedtuple(
@@ -35,14 +35,22 @@ class FaceScapeLandmarkDataset(Dataset):
     def __init__(
         self,
         data_path: str,
+        canonical_shape,
         transform=None,
         view=None,
         subject=None,
         expression=None,
+        filter_public=False,
     ):
         view = view or '*'
         subject = subject or '*'
         expression = expression or '*'
+
+        data_path = Path(data_path)
+
+        publishable_path = data_path / 'publishable_list_v1.txt'
+        publishable = {int(x)
+                       for x in publishable_path.read_text().split(', ')}
 
         self.df = pd.DataFrame(
             [
@@ -53,11 +61,16 @@ class FaceScapeLandmarkDataset(Dataset):
                     'subject': int(p.parent.parent.name),
                 }
                 for p in
-                (Path(data_path) / 'fsmview_trainset')
+                (data_path / 'fsmview_trainset')
                 .glob(f'{subject}/{expression}/{view}.jpg')
              ]
         )
+
+        if filter_public:
+            self.df = self.df[self.df['subject'].isin(publishable)]
+
         self.transform = transform
+        self.canonical = canonical_shape
 
     def __len__(self):
         return len(self.df)
@@ -175,3 +188,12 @@ def load_img_with_landmarks(img_path):
     img = cv2.undistort(img, img_params.K, img_params.dist)
 
     return Image.fromarray(img), torch.tensor(landmarks)
+
+
+def get_eyes_mouth(points):
+    e0 = points[LANDMARKS_300W[36:42]].mean(axis=0)
+    e1 = points[LANDMARKS_300W[42:48]].mean(axis=0)
+    m0 = points[LANDMARKS_300W[48]]
+    m1 = points[LANDMARKS_300W[54]]
+
+    return e0, e1, m0, m1

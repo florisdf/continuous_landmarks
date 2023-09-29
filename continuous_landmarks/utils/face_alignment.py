@@ -1,9 +1,6 @@
 import cv2
 import numpy as np
-import torch
 from numpy.linalg import norm
-from PIL import Image
-from sklearn.preprocessing import normalize
 
 
 def align_face(
@@ -14,6 +11,10 @@ def align_face(
         [0, 1],
         [-1, 0]
     ])
+    landmarks, eye_0, eye_1, mouth_0, mouth_1 = map(
+        np.array,
+        [landmarks, eye_0, eye_1, mouth_0, mouth_1]
+    )
 
     xp = eye_1 - eye_0
     yp = 1/2*(eye_0 + eye_1) - 1/2*(mouth_0 + mouth_1)
