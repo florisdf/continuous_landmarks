@@ -1,7 +1,6 @@
 from collections import namedtuple
 import pandas as pd
 from pathlib import Path
-import re
 
 import cv2
 import json
@@ -23,29 +22,48 @@ LANDMARKS = [
 
 ImageParams = namedtuple(
     'ImageParams',
-    ['cam_id', 'expr', 'subj',
+    ['view_id', 'expr', 'subj',
      'mv_scale', 'mv_Rt',
      'K', 'Rt', 'dist', 'h', 'w', 'is_valid']
 )
 
 
-SCALE_DICT = json.load(Path('Rt_scale_dict.json').open())
+SCALE_DICT = json.load((Path(__file__).parent / 'Rt_scale_dict.json').open())
 
 
 class FaceScapeLandmarkDataset(Dataset):
     def __init__(
         self,
         data_path: str,
-        transform = None,
+        transform=None,
+        view=None,
+        subject=None,
+        expression=None,
     ):
-        self.imgs = list((Path(data_path) / 'fsmview_trainset').glob('*/*/*.jpg'))
+        view = view or '*'
+        subject = subject or '*'
+        expression = expression or '*'
+
+        self.df = pd.DataFrame(
+            [
+                {
+                    'image': p,
+                    'expression': p.parent.name,
+                    'view': int(p.stem),
+                    'subject': int(p.parent.parent.name),
+                }
+                for p in
+                (Path(data_path) / 'fsmview_trainset')
+                .glob(f'{subject}/{expression}/{view}.jpg')
+             ]
+        )
         self.transform = transform
 
     def __len__(self):
-        return len(self.imgs)
+        return len(self.df)
 
     def __getitem__(self, idx):
-        img_path = self.imgs[idx]
+        img_path = self.df.iloc[idx]['image']
         im, points = load_img_with_landmarks(img_path)
 
         if self.transform is not None:
@@ -105,21 +123,21 @@ def get_obj_verts(obj_path: Path):
 
 
 def get_img_params(img_path):
-    cam_id = img_path.stem
+    view_id = img_path.stem
     expr = img_path.parent.name
     subj = img_path.parent.parent.name
     mv_scale, mv_Rt = map(np.array, SCALE_DICT[subj][expr.split('_')[0]])
 
     params = json.load((img_path.parent / 'params.json').open())
-    K = np.array(params[f'{cam_id}_K']) # intrinsic mat
-    Rt = np.array(params[f'{cam_id}_Rt']) # extrinsic mat
-    dist = np.array(params[f'{cam_id}_distortion'], dtype=np.float32) # distortion parameter
-    h = params[f'{cam_id}_height']
-    w = params[f'{cam_id}_width']
-    is_valid = params[f'{cam_id}_valid']
+    K = np.array(params[f'{view_id}_K'])
+    Rt = np.array(params[f'{view_id}_Rt'])
+    dist = np.array(params[f'{view_id}_distortion'], dtype=np.float32)
+    h = params[f'{view_id}_height']
+    w = params[f'{view_id}_width']
+    is_valid = params[f'{view_id}_valid']
 
     return ImageParams(
-        cam_id, expr, subj,
+        view_id, expr, subj,
         mv_scale, mv_Rt,
         K, Rt, dist, h, w, is_valid
     )
@@ -128,9 +146,9 @@ def get_img_params(img_path):
 def transform_tu_points_to_pixel(points, mv_Rt, mv_scale, Rt, K, dist):
     # Transform TU points to world coordinates
     proj_points = points - mv_Rt[:3, 3]
-    proj_points = np.tensordot(np.linalg.inv(mv_Rt[:3,:3]), proj_points.T, 1).T
+    proj_points = (np.linalg.inv(mv_Rt[:3, :3]) @ proj_points.T).T
     proj_points /= mv_scale
-    
+
     # Transform TU points from world to pixel coordinates
     rot_vec, _ = cv2.Rodrigues(Rt[:3, :3])
     proj_points, _ = cv2.projectPoints(proj_points, rot_vec, Rt[:3, 3],
@@ -145,8 +163,8 @@ def load_img_with_landmarks(img_path):
 
     obj_path = data_path / f'facescape_trainset/{subj}/models_reg/{expr}.obj'
     img_params = get_img_params(img_path)
-    points = get_obj_verts(obj_path)
-    
+    points = np.array(get_obj_verts(obj_path))
+
     landmarks = transform_tu_points_to_pixel(
         points,
         img_params.mv_Rt, img_params.mv_scale,
@@ -156,4 +174,4 @@ def load_img_with_landmarks(img_path):
     img = cv2.imread(str(img_path))[..., ::-1]
     img = cv2.undistort(img, img_params.K, img_params.dist)
 
-    return Image.fromarray(img), landmarks
+    return Image.fromarray(img), torch.tensor(landmarks)
