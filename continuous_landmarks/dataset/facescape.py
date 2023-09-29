@@ -142,12 +142,7 @@ def get_img_params(img_path):
     mv_scale, mv_Rt = map(np.array, SCALE_DICT[subj][expr.split('_')[0]])
 
     params = json.load((img_path.parent / 'params.json').open())
-    K = np.array(params[f'{view_id}_K'])
-    Rt = np.array(params[f'{view_id}_Rt'])
-    dist = np.array(params[f'{view_id}_distortion'], dtype=np.float32)
-    h = params[f'{view_id}_height']
-    w = params[f'{view_id}_width']
-    is_valid = params[f'{view_id}_valid']
+    K, Rt, dist, h, w, is_valid = parse_params(params, view_id)
 
     return ImageParams(
         view_id, expr, subj,
@@ -156,17 +151,31 @@ def get_img_params(img_path):
     )
 
 
+def parse_params(params, view_id):
+    K = np.array(params[f'{view_id}_K'])
+    Rt = np.array(params[f'{view_id}_Rt'])
+    dist = np.array(params[f'{view_id}_distortion'], dtype=np.float32)
+    h = params[f'{view_id}_height']
+    w = params[f'{view_id}_width']
+    is_valid = params[f'{view_id}_valid']
+    return K, Rt, dist, h, w, is_valid
+
+
 def transform_tu_points_to_pixel(points, mv_Rt, mv_scale, Rt, K, dist):
     # Transform TU points to world coordinates
     proj_points = points - mv_Rt[:3, 3]
-    proj_points = (np.linalg.inv(mv_Rt[:3, :3]) @ proj_points.T).T
+    proj_points = (mv_Rt[:3, :3].T @ proj_points.T).T
     proj_points /= mv_scale
 
-    # Transform TU points from world to pixel coordinates
-    rot_vec, _ = cv2.Rodrigues(Rt[:3, :3])
-    proj_points, _ = cv2.projectPoints(proj_points, rot_vec, Rt[:3, 3],
-                                       K, dist)
-    return proj_points.squeeze()
+    # Transform TU points from world to camera coordinates
+    proj_points = (Rt[:3, :3] @ proj_points.T + Rt[:3, 3:]).T
+
+    # Transform TU points from camera to pixel coordinates
+    proj_points = (K @ proj_points.T).T
+    proj_points /= proj_points[:, -1:]
+    proj_points = proj_points[:, :-1]
+
+    return proj_points
 
 
 def load_img_with_landmarks(img_path):
