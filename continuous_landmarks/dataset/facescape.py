@@ -1,16 +1,15 @@
+from collections import namedtuple
 import pandas as pd
 from pathlib import Path
 import re
 
+import cv2
+import json
+import numpy as np
+from PIL import Image
 import torch
 from torch.utils.data import Dataset
 
-EXPRESSIONS = [
-    'anger', 'brow_lower', 'brow_raiser', 'cheek_blowing', 'chin_raiser',
-    'dimpler', 'eye_closed', 'grin', 'jaw_forward', 'jaw_left', 'jaw_right',
-    'lip_funneler', 'lip_puckerer', 'lip_roll', 'mouth_left', 'mouth_right',
-    'mouth_stretch', 'neutral', 'sadness', 'smile'
-]
 
 LANDMARKS = [
     23404, 4607, 4615, 4655, 20356, 4643, 5022, 5013, 1681, 1692, 11470, 10441,
@@ -20,6 +19,39 @@ LANDMARKS = [
     4985, 4898, 6571, 1575, 1663, 1599, 1899, 12138, 5231, 21978, 5101, 21067,
     21239, 11378, 11369, 11553, 12048, 5212, 21892
 ]
+
+
+ImageParams = namedtuple(
+    'ImageParams',
+    ['cam_id', 'expr', 'subj',
+     'mv_scale', 'mv_Rt',
+     'K', 'Rt', 'dist', 'h', 'w', 'is_valid']
+)
+
+
+SCALE_DICT = json.load(Path('Rt_scale_dict.json').open())
+
+
+class FaceScapeLandmarkDataset(Dataset):
+    def __init__(
+        self,
+        data_path: str,
+        transform = None,
+    ):
+        self.imgs = list((Path(data_path) / 'fsmview_trainset').glob('*/*/*.jpg'))
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.imgs)
+
+    def __getitem__(self, idx):
+        img_path = self.imgs[idx]
+        im, points = load_img_with_landmarks(img_path)
+
+        if self.transform is not None:
+            im, points = self.transform(im, points)
+
+        return im, points
 
 
 class FaceScapeTUDataset(Dataset):
@@ -32,7 +64,7 @@ class FaceScapeTUDataset(Dataset):
             [
                 {
                     'obj_path': p,
-                    'expression': re.sub(r'^\d+_', '', p.stem),
+                    'expression': p.stem,
                     'subject': int(p.parent.parent.name),
                 }
                 for p in
@@ -42,6 +74,7 @@ class FaceScapeTUDataset(Dataset):
         )
 
         if expression is not None:
+            assert expression in df.expression.values
             df = df[df.expression == expression].reset_index(drop=True)
 
         self.df = df
@@ -69,3 +102,58 @@ def get_obj_verts(obj_path: Path):
             verts.append(vertex)
 
     return torch.tensor(verts)
+
+
+def get_img_params(img_path):
+    cam_id = img_path.stem
+    expr = img_path.parent.name
+    subj = img_path.parent.parent.name
+    mv_scale, mv_Rt = map(np.array, SCALE_DICT[subj][expr.split('_')[0]])
+
+    params = json.load((img_path.parent / 'params.json').open())
+    K = np.array(params[f'{cam_id}_K']) # intrinsic mat
+    Rt = np.array(params[f'{cam_id}_Rt']) # extrinsic mat
+    dist = np.array(params[f'{cam_id}_distortion'], dtype=np.float32) # distortion parameter
+    h = params[f'{cam_id}_height']
+    w = params[f'{cam_id}_width']
+    is_valid = params[f'{cam_id}_valid']
+
+    return ImageParams(
+        cam_id, expr, subj,
+        mv_scale, mv_Rt,
+        K, Rt, dist, h, w, is_valid
+    )
+
+
+def transform_tu_points_to_pixel(points, mv_Rt, mv_scale, Rt, K, dist):
+    # Transform TU points to world coordinates
+    proj_points = points - mv_Rt[:3, 3]
+    proj_points = np.tensordot(np.linalg.inv(mv_Rt[:3,:3]), proj_points.T, 1).T
+    proj_points /= mv_scale
+    
+    # Transform TU points from world to pixel coordinates
+    rot_vec, _ = cv2.Rodrigues(Rt[:3, :3])
+    proj_points, _ = cv2.projectPoints(proj_points, rot_vec, Rt[:3, 3],
+                                       K, dist)
+    return proj_points.squeeze()
+
+
+def load_img_with_landmarks(img_path):
+    expr = img_path.parent.name
+    subj = img_path.parent.parent.name
+    data_path = img_path.parent.parent.parent.parent
+
+    obj_path = data_path / f'facescape_trainset/{subj}/models_reg/{expr}.obj'
+    img_params = get_img_params(img_path)
+    points = get_obj_verts(obj_path)
+    
+    landmarks = transform_tu_points_to_pixel(
+        points,
+        img_params.mv_Rt, img_params.mv_scale,
+        img_params.Rt, img_params.K, img_params.dist
+    )
+
+    img = cv2.imread(str(img_path))[..., ::-1]
+    img = cv2.undistort(img, img_params.K, img_params.dist)
+
+    return Image.fromarray(img), landmarks
