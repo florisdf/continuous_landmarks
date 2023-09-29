@@ -1,18 +1,25 @@
 import numpy as np
+from pathlib import Path
 from PIL import Image
 import re
+import torch
 from torch.utils.data import Dataset
 
 from .facescape import LANDMARKS_300W
 
 
 class Face300WDataset(Dataset):
-    def __init__(self, data_path, canonical_shape, transform=None):
+    def __init__(
+        self, data_path,
+        transform=None,
+        canon_shape_file='facescape_mouth_stretch.pth',
+    ):
         self.data = [
             (p.parent / f'{p.stem}.png', parse_points(p))
             for p in data_path.glob('*/*.pts')
         ]
         self.transform = transform
+        canonical_shape = torch.load(Path(__file__).parent / canon_shape_file)
         self.canonical = canonical_shape[LANDMARKS_300W]
 
     def __len__(self):

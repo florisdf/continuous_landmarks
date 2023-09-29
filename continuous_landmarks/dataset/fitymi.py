@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 from PIL import Image
 import torch
@@ -7,7 +9,11 @@ from .facescape import LANDMARKS_300W
 
 
 class FITYMIDataset(Dataset):
-    def __init__(self, data_path, canonical_shape, transform=None):
+    def __init__(
+        self, data_path,
+        transform=None,
+        canon_shape_file='facescape_mouth_stretch.pth',
+    ):
         self.data = [
             (p.parent / f'{p.name.replace("_ldmks.txt", ".png")}',
              parse_points(p))
@@ -15,6 +21,7 @@ class FITYMIDataset(Dataset):
         ]
         self.transform = transform
 
+        canonical_shape = torch.load(Path(__file__).parent / canon_shape_file)
         canonical = canonical_shape[LANDMARKS_300W]
         e0 = canonical_shape[LANDMARKS_300W[36:42]].mean(axis=0)
         e1 = canonical_shape[LANDMARKS_300W[42:48]].mean(axis=0)

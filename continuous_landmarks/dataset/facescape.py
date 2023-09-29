@@ -35,8 +35,8 @@ class FaceScapeLandmarkDataset(Dataset):
     def __init__(
         self,
         data_path: str,
-        canonical_shape,
         transform=None,
+        canon_shape_file='facescape_mouth_stretch.pth',
         view=None,
         subject=None,
         expression=None,
@@ -70,7 +70,7 @@ class FaceScapeLandmarkDataset(Dataset):
             self.df = self.df[self.df['subject'].isin(publishable)]
 
         self.transform = transform
-        self.canonical = canonical_shape
+        self.canonical = torch.load(Path(__file__).parent / canon_shape_file)
 
     def __len__(self):
         return len(self.df)
