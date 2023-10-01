@@ -1,91 +1,115 @@
 import argparse
+from itertools import chain
 from pathlib import Path
 
-import numpy as np
 import torch
-from torch.optim import SGD
+from torch.optim import AdamW
 from torch.optim.lr_scheduler import LinearLR
 from torch.utils.data import DataLoader
 import wandb
 
-from shape_transformers.training import TrainingSteps, TrainingLoop
-from shape_transformers.utils.kfold import kfold_split
-from shape_transformers.dataset.nphm_dataset import NPHMDataset
-from shape_transformers.model.shape_transformer import ShapeTransformer
-from shape_transformers.dataset.transforms import (
-    ShapePositionNormalize, SubsampleShape, Compose
+from continuous_landmarks.dataset import face300w, facescape, fitymi, concat
+from continuous_landmarks.model import FeatureExtractor, LandmarkPredictor,\
+    PositionEncoder
+from continuous_landmarks.utils.kfold import kfold_split
+from continuous_landmarks.dataset.transforms import (
+    Compose, Align, CenterCrop, Resize, RandomResizedCrop,
+    RandomRotation, ColorJitter, ToTensor, Normalize,
 )
+from continuous_landmarks.training import TrainingLoop, TrainingSteps
 
 
 def run_training(
     # Model
-    token_size=64,
-    disentangle_style=False,
+    feat_model,
+    lm_model,
 
     # Dataset
-    data_path='/apollo/datasets/NPHM',
-    scan_type='registration',
-    drop_bad_scans=True,
-    n_verts_subsample=None,
-    subsample_seed=15,
+    data_path_300w,
+    data_path_fitymi,
+    data_path_facescape,
+
+    # Data augmentations
+    input_size,
+    rrc_scale,
+    rrc_ratio,
+    random_angle,
+    random_brightness,
+    random_contrast,
+    random_saturation,
+    norm_mean,
+    norm_std,
 
     # Ckpt
-    load_ckpt=None,
-    save_unique=False,
-    save_last=True,
-    save_best=True,
-    best_metric=None,
-    is_higher_better=True,
-    ckpts_path='./ckpts',
+    load_ckpt,
+    save_unique,
+    save_last,
+    save_best,
+    best_metric,
+    higher_is_better,
+    ckpts_path,
 
     # K-Fold
-    k_fold_seed=15,
-    k_fold_num_folds=5,
-    k_fold_val_fold=0,
+    k_fold_seed,
+    k_fold_num_folds,
+    k_fold_val_fold,
 
     # Dataloader
-    batch_size=32,
-    val_batch_size=32,
-    num_workers=8,
+    batch_size,
+    val_batch_size,
+    num_workers,
 
     # Optimizer
-    lr=0.01,
-    momentum=0.95,
-    weight_decay=1e-5,
-    lr_warmup_steps=1,
-    num_accum_steps=1,
+    lr,
+    beta1,
+    beta2,
+    weight_decay,
+    lr_warmup_steps,
 
     # Train
-    num_epochs=30,
-    max_num_3d_logs=0,
+    num_epochs,
 
     # Device
-    device='cuda',
+    device,
 ):
-    dl_train, dl_val, dl_test = get_data_loaders(
-        data_path, scan_type, drop_bad_scans, n_verts_subsample,
-        subsample_seed, k_fold_num_folds, k_fold_val_fold, k_fold_seed,
-        batch_size, val_batch_size, num_workers
-    )
+    dl_train, dl_val_300w, dl_val_fitymi, dl_val_facescape = \
+        get_data_loaders(
+            data_path_300w, data_path_fitymi, data_path_facescape,
+            k_fold_num_folds, k_fold_val_fold, k_fold_seed,
+            batch_size, val_batch_size, num_workers,
+            input_size, rrc_scale, rrc_ratio,
+            random_angle, random_brightness, random_contrast,
+            random_saturation, norm_mean, norm_std,
+        )
 
     device = torch.device(device)
 
-    model = ShapeTransformer(
-        token_size=token_size,
-        disentangle_style=disentangle_style
+    pos_encoder = PositionEncoder()
+    feat_extractor = FeatureExtractor('ConvNeXt')
+    lm_predictor = LandmarkPredictor(
+        query_size=pos_encoder.encoding_size,
+        feature_size=feat_extractor.feature_size,
+        model_name='Transformer',
     )
+
     if load_ckpt is not None:
-        model.load_state_dict(torch.load(load_ckpt))
+        state_dicts = torch.load(load_ckpt)
+        pos_encoder.load_state_dict(state_dicts['PositionEncoder'])
+        feat_extractor.load_state_dict(state_dicts['FeatureExtractor'])
+        lm_predictor.load_state_dict(state_dicts['LandmarkPredictor'])
 
     training_steps = TrainingSteps(
-        model=model,
-        max_num_3d_logs=max_num_3d_logs,
+        pos_encoder=pos_encoder,
+        feat_extractor=feat_extractor,
+        lm_predictor=lm_predictor,
     )
 
-    optimizer = SGD(
-        model.parameters(),
+    optimizer = AdamW(
+        chain(pos_encoder.parameters(),
+              feat_extractor.parameters(),
+              lm_predictor.parameters()),
         lr=lr,
-        momentum=momentum,
+        betas=(beta1, beta2),
         weight_decay=weight_decay
     )
     lr_scheduler = LinearLR(
@@ -98,106 +122,145 @@ def run_training(
     training_loop = TrainingLoop(
         training_steps=training_steps,
         optimizer=optimizer,
-        num_accum_steps=num_accum_steps,
         lr_scheduler=lr_scheduler,
         device=device,
         num_epochs=num_epochs,
         dl_train=dl_train,
-        dl_val=dl_val,
-        dl_test=dl_test,
+        dl_val_300w=dl_val_300w,
+        dl_val_fitymi=dl_val_fitymi,
+        dl_val_facescape=dl_val_facescape,
         save_unique=save_unique,
         save_last=save_last,
         save_best=save_best,
         best_metric=best_metric,
-        is_higher_better=is_higher_better,
+        higher_is_better=higher_is_better,
         ckpts_path=ckpts_path,
     )
     training_loop.run()
 
 
 def get_data_loaders(
-    data_path, scan_type, drop_bad_scans, n_verts_subsample,
-    subsample_seed, k_fold_num_folds, k_fold_val_fold, k_fold_seed,
-    batch_size, val_batch_size, num_workers
+    data_path_300w, data_path_fitymi, data_path_facescape,
+    k_fold_num_folds, k_fold_val_fold, k_fold_seed,
+    batch_size, val_batch_size, num_workers,
+    input_size, rrc_scale, rrc_ratio,
+    random_angle, random_brightness, random_contrast,
+    random_saturation, norm_mean, norm_std,
 ):
-    v_stat_dir = Path(__file__).parent / 'shape_transformers/dataset/'
-    v_mean = np.load(v_stat_dir / 'nphm_mean_vertices.npy')
-    v_std = np.load(v_stat_dir / 'nphm_std_vertices.npy')
-    norm = ShapePositionNormalize(v_mean, v_std)
-    train_subsamp = SubsampleShape(n_verts_subsample, subsample_seed)
-    test_subsamp = SubsampleShape(None)
+    common_train_tfms = [
+        RandomResizedCrop(input_size, scale=rrc_scale, ratio=rrc_ratio),
+        ColorJitter(random_brightness, random_contrast, random_saturation),
+        ToTensor(),
+        Normalize(norm_mean, norm_std),
+    ]
+    if random_angle != 0:
+        common_train_tfms = [
+            RandomRotation(degrees=random_angle),
+            *common_train_tfms
+        ]
 
-    train_tfm = Compose(norm, train_subsamp)
-    test_tfm = Compose(norm, test_subsamp)
+    common_val_tfms = [
+        Resize(input_size),
+        CenterCrop(input_size),
+        ToTensor(),
+        Normalize(norm_mean, norm_std),
+    ]
 
-    data_path = Path(data_path)
-    ds_train = NPHMDataset(
-        data_path=data_path,
-        subset='train',
-        scan_type=scan_type,
-        drop_bad=drop_bad_scans,
-        transform=train_tfm,
+    # Set up 300W
+    data_path_300w = Path(data_path_300w)
+    ds_train_300w = face300w.Face300WDataset(
+        data_path=data_path_300w,
+        transform=Compose([
+            Align(face300w.get_eyes_mouth),
+            *common_train_tfms
+        ]),
     )
-    ds_test = NPHMDataset(
-        data_path=data_path,
-        subset='test',
-        scan_type=scan_type,
-        drop_bad=drop_bad_scans,
-        transform=test_tfm
+    ds_train_300w, ds_val_300w = kfold_split(
+        ds_train_300w,
+        k=k_fold_num_folds,
+        val_fold=k_fold_val_fold,
+        seed=k_fold_seed,
     )
+    ds_val_300w.transform = Compose([
+        Align(face300w.get_eyes_mouth),
+        *common_val_tfms
+    ])
 
-    if k_fold_val_fold is not None:
-        ds_train, ds_val = kfold_split(
-            ds_train,
-            k=k_fold_num_folds,
-            val_fold=k_fold_val_fold,
-            seed=k_fold_seed,
-        )
-        ds_val.transform = test_tfm
-    else:
-        ds_val = None
+    # Set up FITYMI
+    data_path_fitymi = Path(data_path_fitymi)
+    ds_train_fitymi = fitymi.FITYMIDataset(
+        data_path=data_path_fitymi,
+        transform=Compose([
+            Align(fitymi.get_eyes_mouth),
+            *common_train_tfms
+        ]),
+    )
+    ds_train_fitymi, ds_val_fitymi = kfold_split(
+        ds_train_fitymi,
+        k=k_fold_num_folds,
+        val_fold=k_fold_val_fold,
+        seed=k_fold_seed,
+    )
+    ds_val_fitymi.transform = Compose([
+        Align(fitymi.get_eyes_mouth),
+        *common_val_tfms
+    ])
 
+    # Set up FaceScape
+    data_path_facescape = Path(data_path_facescape)
+    ds_train_facescape = facescape.FaceScapeLandmarkDataset(
+        data_path=data_path_facescape,
+        transform=Compose([
+            Align(facescape.get_eyes_mouth),
+            *common_train_tfms
+        ]),
+    )
+    ds_train_facescape, ds_val_facescape = kfold_split(
+        ds_train_facescape,
+        k=k_fold_num_folds,
+        val_fold=k_fold_val_fold,
+        seed=k_fold_seed,
+    )
+    ds_val_facescape.transform = Compose([
+        Align(facescape.get_eyes_mouth),
+        *common_val_tfms
+    ])
+    ds_train_facescape.df = ds_train_facescape.df.sample(
+        len(ds_train_fitymi)
+    ).reset_index(drop=True)
+    ds_val_facescape.df = ds_val_facescape.df.sample(
+        len(ds_val_fitymi),
+        random_state=42,
+    ).reset_index(drop=True)
+
+    # Create training set by concatenating the different training sets
+    ds_train = concat.ConcatDataset([ds_train_300w, ds_train_fitymi,
+                                     ds_train_facescape])
     dl_train = DataLoader(
         ds_train,
         shuffle=True,
         batch_size=batch_size,
         num_workers=num_workers,
     )
-    dl_test = DataLoader(
-        ds_test,
+
+    # Validation data loaders
+    dl_val_300w = DataLoader(
+        ds_val_300w,
+        batch_size=val_batch_size,
+        num_workers=num_workers,
+    )
+    dl_val_fitymi = DataLoader(
+        ds_val_fitymi,
+        batch_size=val_batch_size,
+        num_workers=num_workers,
+    )
+    dl_val_facescape = DataLoader(
+        ds_val_facescape,
         batch_size=val_batch_size,
         num_workers=num_workers,
     )
 
-    if ds_val is not None:
-        dl_val = DataLoader(
-            ds_val,
-            batch_size=val_batch_size,
-            num_workers=num_workers,
-        )
-        return dl_train, dl_val, dl_test
-    else:
-        return dl_train, None, dl_test
-
-
-def int_list_arg_type(arg):
-    return [int(s) for s in arg.split(',') if len(s.strip()) > 0]
-
-
-def str_list_arg_type(arg):
-    return [s.strip() for s in arg.split(',') if len(s.strip()) > 0]
-
-
-def crop_box_size_type(arg):
-    try:
-        value = int(arg)
-        return (value, value)
-    except ValueError:
-        return arg
-
-
-def int_or_none(arg):
-    return None if arg == "None" else int(arg)
+    return dl_train, dl_val_300w, dl_val_fitymi, dl_val_facescape
 
 
 if __name__ == '__main__':
@@ -207,13 +270,12 @@ if __name__ == '__main__':
 
     # Model
     parser.add_argument(
-        '--token_size', default=64,
-        help="Size of tokens used as input into the shape transformer.",
-        type=int
+        '--feat_model', default='ConvNeXt',
+        help="The feature extractor to use.",
     )
     parser.add_argument(
-        '--disentangle_style', action='store_true',
-        help='If set, disentangle style code into an expression and identity part.'
+        '--lm_model', default='Transformer',
+        help='The landmaek predictor to use.'
     )
 
     # Ckpt
@@ -245,7 +307,8 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '--higher_is_better', action='store_true',
-        help='If set, the metric set with --best_metric is better when it inreases.'
+        help='If set, the metric set with --best_metric is better when it '
+        'inreases.'
     )
     parser.add_argument(
         '--ckpts_path', default='./ckpts',
@@ -259,7 +322,7 @@ if __name__ == '__main__':
         type=int
     )
     parser.add_argument(
-        '--k_fold_num_folds', default=5,
+        '--k_fold_num_folds', default=20,
         help='The number of folds to use.',
         type=int
     )
@@ -267,35 +330,64 @@ if __name__ == '__main__':
         '--k_fold_val_fold', default=0,
         help='The index of the validation fold. '
         'If None, all folds are used for training.',
-        type=int_or_none
+        type=int
     )
 
     # Dataset
     parser.add_argument(
-        '--data_path', default='/apollo/datasets/NPHM',
-        help='Path to the NPHM dataset.',
+        '--data_path_300w', default='/apollo/datasets/300W',
+        help='Path to the 300W dataset.',
     )
     parser.add_argument(
-        '--scan_type', default='registration',
-        help='Scan type to use for the input data.',
+        '--data_path_fitymi', default='/apollo/datasets/FITYMI',
+        help='Path to the Fake-It-Till-You-Make-It dataset.',
     )
     parser.add_argument(
-        '--keep_bad_scans', action='store_true',
-        help='If set, leave bad scans in the dataset.',
+        '--data_path_facescape', default='/apollo/datasets/FaceScape',
+        help='Path to the FaceScape dataset.',
+    )
+
+    # Data augmentations
+    parser.add_argument(
+        '--input_size', default=224,
+        help='Input size of the feature extractor'
     )
     parser.add_argument(
-        '--n_verts_subsample', default=None,
-        help='Number of vertices to subsample.',
-        type=int_or_none,
+        '--rrc_scale', default=(0.08, 1.0),
+        help='Random resized crop scale'
     )
     parser.add_argument(
-        '--subsample_seed', default=15,
-        help='Random seed to use for shuffling the subsample indices during training.',
-        type=int
+        '--rrc_ratio', default=(3/4, 4/3),
+        help='Random resized crop aspect ratio'
+    )
+    parser.add_argument(
+        '--random_angle', default=0,
+        help='Random angle'
+    )
+    parser.add_argument(
+        '--random_brightness', default=0.1,
+        help='Brightness jitter'
+    )
+    parser.add_argument(
+        '--random_contrast', default=0.1,
+        help='Contrast jitter'
+    )
+    parser.add_argument(
+        '--random_saturation', default=0.1,
+        help='Saturation jitter'
+    )
+    parser.add_argument(
+        '--norm_mean', default=[0.5, 0.5, 0.5],
+        help='Image normalization mean'
+    )
+    parser.add_argument(
+        '--norm_std', default=[0.2, 0.2, 0.2],
+        help='Image normalization std'
     )
 
     # Dataloader args
-    parser.add_argument('--batch_size', default=32, help='The training batch size.', type=int)
+    parser.add_argument('--batch_size', default=32,
+                        help='The training batch size.', type=int)
     parser.add_argument('--val_batch_size', default=32,
                         help='The validation batch size.', type=int)
     parser.add_argument(
@@ -307,27 +399,21 @@ if __name__ == '__main__':
     # Optimizer args
     parser.add_argument('--lr', default=0.01, help='The learning rate.',
                         type=float)
-    parser.add_argument('--momentum', default=0.95, help='The momentum.',
+    parser.add_argument('--beta1', default=0.95, help='The beta1 of AdamW.',
                         type=float)
-    parser.add_argument('--weight_decay', default=1e-5, help='The weight decay.',
+    parser.add_argument('--beta2', default=0.95, help='The beta2 of AdamW.',
+                        type=float)
+    parser.add_argument('--weight_decay', default=0,
+                        help='The weight decay.',
                         type=float)
     parser.add_argument('--lr_warmup_steps', default=1, help='The number of '
                         'learning rate warmup steps.',
                         type=int)
-    parser.add_argument('--num_accum_steps', default=1, help='The number of '
-                        'gradient accumulation steps.',
-                        type=int)
-
 
     # Train args
     parser.add_argument(
         '--num_epochs', default=500,
         help='The number of epochs to train.',
-        type=int
-    )
-    parser.add_argument(
-        '--max_num_3d_logs', default=0,
-        help='The maximum number of 3d shapes to log per validation epoch',
         type=int
     )
 
@@ -345,50 +431,10 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
+    args_dict = vars(args)
     wandb.init(entity=args.wandb_entity, project=args.wandb_project,
-               config=vars(args))
-    run_training(
-        # Model
-        token_size=args.token_size,
-        disentangle_style=args.disentangle_style,
+               config=args_dict)
 
-        # Dataset
-        data_path=args.data_path,
-        scan_type=args.scan_type,
-        drop_bad_scans=not args.keep_bad_scans,
-        n_verts_subsample=args.n_verts_subsample,
-        subsample_seed=args.subsample_seed,
-
-        # Ckpt
-        load_ckpt=args.load_ckpt,
-        save_unique=args.save_unique,
-        save_last=args.save_last,
-        save_best=args.save_best,
-        best_metric=args.best_metric,
-        is_higher_better=args.higher_is_better,
-        ckpts_path=args.ckpts_path,
-
-        # K-Fold
-        k_fold_seed=args.k_fold_seed,
-        k_fold_num_folds=args.k_fold_num_folds,
-        k_fold_val_fold=args.k_fold_val_fold,
-
-        # Dataloader
-        batch_size=args.batch_size,
-        val_batch_size=args.val_batch_size,
-        num_workers=args.num_workers,
-
-        # Optimizer
-        lr=args.lr,
-        momentum=args.momentum,
-        weight_decay=args.weight_decay,
-        lr_warmup_steps=args.lr_warmup_steps,
-        num_accum_steps=args.num_accum_steps,
-
-        # Train
-        num_epochs=args.num_epochs,
-        max_num_3d_logs=args.max_num_3d_logs,
-
-        # Device
-        device=args.device,
-    )
+    del args_dict['wandb_entity']
+    del args_dict['wandb_project']
+    run_training(**vars(args))
