@@ -290,7 +290,7 @@ if __name__ == '__main__':
         help='If set, don\'t save checkpoints during training.'
     )
     parser.add_argument(
-        '--best_metric', default='L2',
+        '--best_metric', default='GaussianNLL',
         help='If this metric improves, create a checkpoint '
         '(when --save_best is set).'
     )
