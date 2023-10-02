@@ -2,11 +2,12 @@ from pathlib import Path
 import sys
 
 import torch
-from torchvision.transforms import Normalize
 from tqdm import tqdm
 import wandb
 
 from .training_steps import TrainingSteps
+from ..dataset.transforms import Compose, Normalize,\
+    AbsToRelLdmks, RelToAbsLdmks
 
 
 class TrainingLoop:
@@ -109,7 +110,7 @@ class TrainingLoop:
         for dl_val in self.dl_val_list:
             self.training_steps.on_before_validation_epoch()
             ds = dl_val.dataset
-            inv_norm = get_inv_norm(ds.transform.transforms[-1])
+            inv_tfm = get_inv_tfm(ds.transform)
             for batch_idx, batch in tqdm(
                 enumerate(dl_val),
                 leave=False,
@@ -118,7 +119,7 @@ class TrainingLoop:
                 batch = tuple(x.to(self.device) for x in batch)
                 with torch.no_grad():
                     self.training_steps.on_validation_step(
-                        batch, batch_idx, inv_norm
+                        batch, batch_idx, inv_tfm
                     )
 
             d = self.training_steps.on_after_validation_epoch()
@@ -201,7 +202,17 @@ def log(log_dict, epoch_idx, batch_idx=None, section=None):
         wandb.log(wandb_dict)
 
 
-def get_inv_norm(norm_obj):
+def get_inv_tfm(compose_tfm):
+    norm_obj = compose_tfm.transforms[-1]
+    assert isinstance(norm_obj, Normalize)
     inv_std = [1/s for s in norm_obj.std]
     inv_mean = [-m/s for m, s in zip(norm_obj.mean, norm_obj.std)]
-    return Normalize(inv_mean, inv_std)
+    inv_norm = Normalize(inv_mean, inv_std)
+
+    assert any(isinstance(t, AbsToRelLdmks) for t in compose_tfm.transforms)
+    rel2abs = RelToAbsLdmks()
+
+    return Compose([
+        inv_norm,
+        rel2abs
+    ])

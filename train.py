@@ -15,6 +15,7 @@ from continuous_landmarks.utils.kfold import kfold_split
 from continuous_landmarks.dataset.transforms import (
     Compose, Align, CenterCrop, Resize, RandomResizedCrop,
     RandomRotation, ColorJitter, ToTensor, Normalize,
+    AbsToRelLdmks,
 )
 from continuous_landmarks.training import TrainingLoop, TrainingSteps
 
@@ -146,6 +147,7 @@ def get_data_loaders(
     common_train_tfms = [
         RandomResizedCrop(input_size, scale=rrc_scale, ratio=rrc_ratio),
         ColorJitter(random_brightness, random_contrast, random_saturation),
+        AbsToRelLdmks(),
         ToTensor(),
         Normalize(norm_mean, norm_std),
     ]
@@ -158,6 +160,7 @@ def get_data_loaders(
     common_val_tfms = [
         Resize(input_size),
         CenterCrop(input_size),
+        AbsToRelLdmks(),
         ToTensor(),
         Normalize(norm_mean, norm_std),
     ]

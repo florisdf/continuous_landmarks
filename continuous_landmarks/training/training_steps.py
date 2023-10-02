@@ -61,19 +61,19 @@ class TrainingSteps:
     def on_before_validation_epoch(self):
         pass
 
-    def on_validation_step(self, batch, batch_idx, inv_norm, log_sample_idx=0):
+    def on_validation_step(self, batch, batch_idx, inv_tfm, log_sample_idx=0):
         lm_pred_batch, loss = self._get_pred_and_loss(batch)
         self.val_losses.append(loss)
 
         if len(self.val_ims) < self.max_logged_ims:
             # Log images with LM preds
             img_batch, *_ = batch
-            img = img_batch[log_sample_idx]
-            img_batch = inv_norm(img)
-            im = to_pil_image(img_batch.cpu())
+            img = img_batch[log_sample_idx].cpu()
+            lm_pred = lm_pred_batch[log_sample_idx].cpu()
 
-            lm_pred = lm_pred_batch[log_sample_idx]
-            im = draw_points(im, lm_pred.cpu())
+            img, lm_pred = inv_tfm(img, lm_pred)
+            im = to_pil_image(img)
+            im = draw_points(im, lm_pred)
             self.val_ims.append(
                 wandb.Image(im.resize(self.img_log_size))
             )

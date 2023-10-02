@@ -117,6 +117,30 @@ class ColorJitter(transforms.ColorJitter):
         return new_img, points
 
 
+class AbsToRelLdmks:
+    def __call__(self, img, points):
+        """
+        Convert points to relative coordinates: [0, S] -> [-1, 1]
+        """
+        img_size = max(img.size)
+        points = points / img_size
+        points *= 2
+        points -= 1
+        return img, points
+
+
+class RelToAbsLdmks:
+    def __call__(self, img, points):
+        """
+        Convert points to absolute coordinates: [-1, 1] -> [0, S]
+        """
+        img_size = max(img.shape)
+        points = points + 1
+        points /= 2
+        points *= img_size
+        return img, points
+
+
 class Normalize(transforms.Normalize):
     def forward(self, img, points):
         new_img = super().forward(img)
