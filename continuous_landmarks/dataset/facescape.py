@@ -184,20 +184,25 @@ def load_img_with_landmarks(img_path):
     subj = img_path.parent.parent.name
     data_path = img_path.parent.parent.parent.parent
 
-    obj_path = data_path / f'facescape_trainset/{subj}/models_reg/{expr}.obj'
-    img_params = get_img_params(img_path)
-    points = np.array(get_obj_verts(obj_path))
-
-    landmarks = transform_tu_points_to_pixel(
-        points,
-        img_params.mv_Rt, img_params.mv_scale,
-        img_params.Rt, img_params.K, img_params.dist
-    )
-
     img = cv2.imread(str(img_path))[..., ::-1]
-    img = cv2.undistort(img, img_params.K, img_params.dist)
 
-    return Image.fromarray(img), torch.tensor(landmarks)
+    ldmks_path = img_path.parent / f'{img_path.stem}_ldmks.pth'
+    if ldmks_path.exists():
+        landmarks = torch.load(ldmks_path)
+    else:
+        obj_path = data_path / f'facescape_trainset/{subj}/models_reg/{expr}.obj'
+        img_params = get_img_params(img_path)
+        points = np.array(get_obj_verts(obj_path))
+
+        landmarks = transform_tu_points_to_pixel(
+            points,
+            img_params.mv_Rt, img_params.mv_scale,
+            img_params.Rt, img_params.K, img_params.dist
+        )
+        img = cv2.undistort(img, img_params.K, img_params.dist)
+        landmarks = torch.tensor(landmarks)
+
+    return Image.fromarray(img), landmarks
 
 
 def get_eyes_mouth(points):
