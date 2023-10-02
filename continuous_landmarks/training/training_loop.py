@@ -98,7 +98,7 @@ class TrainingLoop:
             epoch_idx=self.epoch_idx,
             batch_idx=self.train_batch_idx)
 
-        if self.train_batch_idx % self.val_every == 0:
+        if (self.train_batch_idx + 1) % self.val_every == 0:
             self.run_validation_epochs()
 
         if torch.isnan(loss):
