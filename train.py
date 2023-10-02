@@ -225,10 +225,10 @@ def get_data_loaders(
         *common_val_tfms
     ])
     ds_train_facescape.df = ds_train_facescape.df.sample(
-        len(ds_train_fitymi)
+        min(len(ds_train_fitymi), len(ds_train_facescape))
     ).reset_index(drop=True)
     ds_val_facescape.df = ds_val_facescape.df.sample(
-        len(ds_val_fitymi),
+        min(len(ds_val_fitymi), len(ds_val_facescape)),
         random_state=42,
     ).reset_index(drop=True)
 
@@ -332,7 +332,7 @@ if __name__ == '__main__':
         help='Path to the Fake-It-Till-You-Make-It dataset.',
     )
     parser.add_argument(
-        '--data_path_facescape', default='/apollo/datasets/FaceScape',
+        '--data_path_facescape', default='/apollo/datasets/FaceScape_512',
         help='Path to the FaceScape dataset.',
     )
 
@@ -375,9 +375,9 @@ if __name__ == '__main__':
     )
 
     # Dataloader args
-    parser.add_argument('--batch_size', default=32,
+    parser.add_argument('--batch_size', default=64,
                         help='The training batch size.', type=int)
-    parser.add_argument('--val_batch_size', default=32,
+    parser.add_argument('--val_batch_size', default=64,
                         help='The validation batch size.', type=int)
     parser.add_argument(
         '--num_workers', default=8,
@@ -386,7 +386,7 @@ if __name__ == '__main__':
     )
 
     # Optimizer args
-    parser.add_argument('--lr', default=0.01, help='The learning rate.',
+    parser.add_argument('--lr', default=0.0001, help='The learning rate.',
                         type=float)
     parser.add_argument('--beta1', default=0.95, help='The beta1 of AdamW.',
                         type=float)
