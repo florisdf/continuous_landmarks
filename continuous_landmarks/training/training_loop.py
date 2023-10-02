@@ -14,135 +14,116 @@ class TrainingLoop:
         self,
         training_steps: TrainingSteps,
         optimizer,
-        num_accum_steps,
         lr_scheduler,
         device,
         num_epochs,
         dl_train,
-        dl_val,
-        dl_test,
-        save_unique,
-        save_last,
-        save_best,
+        dl_val_list,
+        val_every,
+        save_ckpts,
         best_metric,
-        is_higher_better,
+        higher_is_better,
         ckpts_path,
     ):
         self.training_steps = training_steps
         self.model = self.training_steps.model.to(device)
+
         self.num_epochs = num_epochs
         self.dl_train = dl_train
-        self.dl_val = dl_val
-        self.dl_test = dl_test
+        self.dl_val_list = dl_val_list
 
         self.minmax_metrics = {}
-        self.ckpt_dir = Path(ckpts_path)
+        self.ckpts_path = Path(ckpts_path)
+        self.val_every = val_every
 
         self.device = device
         self.optimizer = optimizer
-        self.num_accum_steps = num_accum_steps
         self.lr_scheduler = lr_scheduler
         self.epoch_idx = 0
         self.train_batch_idx = -1
-        self.val_batch_idx = -1
-        self.test_batch_idx = -1
 
-        self.save_unique = save_unique
-        self.save_last = save_last
-        self.save_best = save_best
+        self.save_ckpts = save_ckpts
         self.best_metric = best_metric
-        self.is_higher_better = is_higher_better
 
-        self.inv_norm = get_inv_norm(
-            self.dl_val.dataset.transform.transforms[-1]
-        )
+        self.higher_is_better = higher_is_better
 
     def run(self):
         self.minmax_metrics = {}
 
-        # Training loop
         for self.epoch_idx in tqdm(range(self.num_epochs), leave=True):
-            # Training epoch
-            self.model.train()
             self.training_steps.on_before_training_epoch()
-            self.training_epoch()
+
+            for (self.train_batch_idx, batch) in enumerate(
+                tqdm(self.dl_train, leave=False),
+                start=self.train_batch_idx + 1
+            ):
+                self._inner_loop(batch)
+
             log_dict = self.training_steps.on_after_training_epoch()
             log(log_dict, epoch_idx=self.epoch_idx, section='Train')
 
-            # Validation epoch
-            self.model.eval()
-            if self.dl_val is not None:
-                self.training_steps.on_before_validation_epoch()
-                self.validation_epoch()
-                log_dict = self.training_steps.on_after_validation_epoch()
-                log(log_dict, epoch_idx=self.epoch_idx, section='Val')
-
-            # Test epoch
-            if self.dl_test is not None and self.dl_val is None:
-                self.training_steps.on_before_test_epoch()
-                self.test_epoch()
-                log_dict = self.training_steps.on_after_test_epoch()
-                log(log_dict, epoch_idx=self.epoch_idx, section='Test')
-
-            # Update and log minmax_metrics
-            self.update_minmax_metrics(log_dict)
-            log(self.minmax_metrics, epoch_idx=self.epoch_idx, section='Val')
-
-            # Create checkpoints
-            self.create_checkpoints(log_dict)
-
-    def training_epoch(self):
-        for (self.train_batch_idx, batch) in enumerate(
-            tqdm(self.dl_train, leave=False), start=self.train_batch_idx + 1
-        ):
-            batch = tuple(x.to(self.device) for x in batch)
-            loss, log_dict = self.training_steps.on_training_step(
-                batch,
-            )
-            loss = loss / self.num_accum_steps
-            loss.backward()
-            if (
-                ((self.train_batch_idx + 1) % self.num_accum_steps == 0)
-                or ((self.train_batch_idx + 1) % len(self.dl_train) == 0)
-            ):
-                self.optimizer.step()
-                self.lr_scheduler.step()
-                self.model.zero_grad()
-                log(log_dict, epoch_idx=self.epoch_idx,
-                    batch_idx=self.train_batch_idx,
-                    section='TrainLoss')
-                log(
-                    dict(LR=self.lr_scheduler.get_last_lr()[0]),
-                    epoch_idx=self.epoch_idx,
-                    batch_idx=self.train_batch_idx
+            # Create iteration checkpoints
+            if self.save_ckpts:
+                self.create_checkpoints(
+                    is_last=True,
+                    is_best=self.metric_improved(log_dict),
+                    is_epoch=False,
                 )
+
+        # Create epoch checkpoint
+        if self.save_ckpts:
+            self.create_checkpoints(
+                is_last=False,
+                is_best=False,
+                is_epoch=True,
+                epoch_idx=self.epoch_idx,
+            )
+
+    def _inner_loop(self, train_batch):
+        self.model.train()
+
+        batch = tuple(x.to(self.device) for x in train_batch)
+        loss, log_dict = self.training_steps.on_training_step(batch)
+
+        self.model.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        self.lr_scheduler.step()
+
+        log(log_dict, epoch_idx=self.epoch_idx,
+            batch_idx=self.train_batch_idx,
+            section='Train')
+        log(dict(LR=self.lr_scheduler.get_last_lr()[0]),
+            epoch_idx=self.epoch_idx,
+            batch_idx=self.train_batch_idx)
+
+        if self.train_batch_idx % self.val_every == 0:
+            self.run_validation_epochs()
+
         if torch.isnan(loss):
             sys.exit('Loss is NaN. Exiting...')
 
-    def validation_epoch(self):
-        # Validation loop
-        for batch_idx, batch in tqdm(
-            enumerate(self.dl_val),
-            leave=False,
-            total=len(self.dl_val),
-        ):
-            self.val_batch_idx += 1
-            batch = tuple(x.to(self.device) for x in batch)
-            with torch.no_grad():
-                self.training_steps.on_validation_step(batch, batch_idx,
-                                                       self.inv_norm)
+    def run_validation_epochs(self):
+        self.model.eval()
 
-    def test_epoch(self):
-        # Test loop
-        for batch_idx, batch in tqdm(
-            enumerate(self.dl_test),
-            leave=False,
-            total=len(self.dl_test),
-        ):
-            self.test_batch_idx += 1
-            batch = tuple(x.to(self.device) for x in batch)
-            with torch.no_grad():
-                self.training_steps.on_test_step(batch, batch_idx)
+        for dl_val in self.dl_val_list:
+            self.training_steps.on_before_validation_epoch()
+            ds = dl_val.dataset
+            inv_norm = get_inv_norm(ds.transform.transforms[-1])
+            for batch_idx, batch in tqdm(
+                enumerate(dl_val),
+                leave=False,
+                total=len(dl_val),
+            ):
+                batch = tuple(x.to(self.device) for x in batch)
+                with torch.no_grad():
+                    self.training_steps.on_validation_step(
+                        batch, batch_idx, inv_norm
+                    )
+
+            d = self.training_steps.on_after_validation_epoch()
+            log(d, epoch_idx=self.train_batch_idx,
+                section=f'Val{ds.__class__.__name__}')
 
     def update_minmax_metrics(self, val_log_dict):
         for k, v in val_log_dict.items():
@@ -163,31 +144,40 @@ class TrainingLoop:
             ):
                 self.minmax_metrics[min_name] = v
 
-    def create_checkpoints(self, val_log_dict=None):
-        file_prefix = f"{wandb.run.id}_" if self.save_unique else ""
+    def create_checkpoints(self, is_last, is_best, is_epoch,
+                           epoch_idx=None):
+        file_prefix = f"{wandb.run.id}_"
         file_suffix = '.pth'
 
-        if not self.ckpt_dir.exists():
-            self.ckpt_dir.mkdir(parents=True)
+        ckpt_dict = self.model.state_dict()
 
-        if (self.save_best and val_log_dict is not None):
-            if (
-                (self.is_higher_better
-                    and val_log_dict[self.best_metric] >= self.minmax_metrics[f'Max{self.best_metric}'])
-                or
-                (not self.is_higher_better
-                    and val_log_dict[self.best_metric] <= self.minmax_metrics[f'Min{self.best_metric}'])
-            ):
-                torch.save(
-                    self.model.state_dict(),
-                    self.ckpt_dir / f'{file_prefix}best{file_suffix}'
-                )
+        if not self.ckpts_path.exists():
+            self.ckpts_path.mkdir(parents=True)
 
-        if self.save_last:
+        if is_best:
             torch.save(
-                self.model.state_dict(),
-                self.ckpt_dir / f'{file_prefix}last{file_suffix}'
+                ckpt_dict,
+                self.ckpts_path / f'{file_prefix}best{file_suffix}'
             )
+        if is_last:
+            torch.save(
+                ckpt_dict,
+                self.ckpts_path / f'{file_prefix}last{file_suffix}'
+            )
+        if is_epoch:
+            assert epoch_idx is not None
+            torch.save(
+                ckpt_dict,
+                self.ckpts_path / f'{file_prefix}ep{epoch_idx}{file_suffix}'
+            )
+
+    def metric_improved(self, val_log_dict):
+        v = val_log_dict[self.best_metric]
+
+        if self.higher_is_better:
+            return v >= self.minmax_metrics[f'Max{self.best_metric}']
+        else:
+            return v <= self.minmax_metrics[f'Min{self.best_metric}']
 
 
 def log(log_dict, epoch_idx, batch_idx=None, section=None):

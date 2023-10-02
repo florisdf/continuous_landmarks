@@ -1,6 +1,8 @@
 import torch
+from torch import nn
 import torch.nn.functional as F
-from torchvision.transforms.functional import to_pil
+from torchvision.transforms.functional import to_pil_image
+import wandb
 
 from ..utils.draw_points import draw_points
 
@@ -12,11 +14,19 @@ class TrainingSteps:
         feat_extractor,
         lm_predictor,
         max_logged_ims=20,
+        img_log_size=(100, 100),
     ):
         self.pos_encoder = pos_encoder
         self.feat_extractor = feat_extractor
         self.lm_predictor = lm_predictor
+        self.model = nn.ModuleDict({
+            'PositionEncoder': pos_encoder,
+            'FeatureExtractor': feat_extractor,
+            'LandmarkPredictor': lm_predictor,
+        })
+
         self.max_logged_ims = max_logged_ims
+        self.img_log_size = img_log_size
 
         self.val_losses = []
         self.val_ims = []
@@ -39,7 +49,7 @@ class TrainingSteps:
             canon_batch.flatten(end_dim=1)
         ).unflatten(0, (B, N))
         feature = self.feat_extractor(img_batch)
-        *lm_pred, var_pred = self.lm_predictor(query_sequence, feature)
+        lm_pred, var_pred = self.lm_predictor(query_sequence, feature)
 
         loss = F.gaussian_nll_loss(lm_pred, lm_true, var_pred)
 
@@ -51,26 +61,31 @@ class TrainingSteps:
     def on_before_validation_epoch(self):
         pass
 
-    def on_validation_step(self, batch, batch_idx, inv_norm):
-        lm_pred, loss = self._get_pred_and_loss(batch)
+    def on_validation_step(self, batch, batch_idx, inv_norm, log_sample_idx=0):
+        lm_pred_batch, loss = self._get_pred_and_loss(batch)
         self.val_losses.append(loss)
 
         if len(self.val_ims) < self.max_logged_ims:
             # Log images with LM preds
             img_batch, *_ = batch
-            img = img_batch[0]
+            img = img_batch[log_sample_idx]
             img_batch = inv_norm(img)
-            im = to_pil(img_batch.cpu())
-            im = draw_points(im, lm_pred)
-            self.val_ims.append(im)
+            im = to_pil_image(img_batch.cpu())
+
+            lm_pred = lm_pred_batch[log_sample_idx]
+            im = draw_points(im, lm_pred.cpu())
+            self.val_ims.append(
+                wandb.Image(im.resize(self.img_log_size))
+            )
 
     def on_after_validation_epoch(self):
         log_dict = {
-            'GaussianNLL': torch.tensor(self.val_losses).mean()
+            'GaussianNLL': torch.tensor(self.val_losses).mean(),
+            'Images': self.val_ims,
         }
 
         self.val_losses.clear()
-        self.val_ims.clear()
+        self.val_ims = []
 
         return log_dict
 

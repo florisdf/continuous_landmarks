@@ -42,9 +42,7 @@ def run_training(
 
     # Ckpt
     load_ckpt,
-    save_unique,
-    save_last,
-    save_best,
+    no_save_ckpts,
     best_metric,
     higher_is_better,
     ckpts_path,
@@ -68,6 +66,7 @@ def run_training(
 
     # Train
     num_epochs,
+    val_every,
 
     # Device
     device,
@@ -85,11 +84,11 @@ def run_training(
     device = torch.device(device)
 
     pos_encoder = PositionEncoder()
-    feat_extractor = FeatureExtractor('ConvNeXt')
+    feat_extractor = FeatureExtractor(feat_model)
     lm_predictor = LandmarkPredictor(
         query_size=pos_encoder.encoding_size,
         feature_size=feat_extractor.feature_size,
-        model_name='Transformer',
+        model_name=lm_model,
     )
 
     if load_ckpt is not None:
@@ -126,12 +125,9 @@ def run_training(
         device=device,
         num_epochs=num_epochs,
         dl_train=dl_train,
-        dl_val_300w=dl_val_300w,
-        dl_val_fitymi=dl_val_fitymi,
-        dl_val_facescape=dl_val_facescape,
-        save_unique=save_unique,
-        save_last=save_last,
-        save_best=save_best,
+        dl_val_list=[dl_val_300w, dl_val_fitymi, dl_val_facescape],
+        val_every=val_every,
+        save_ckpts=not no_save_ckpts,
         best_metric=best_metric,
         higher_is_better=higher_is_better,
         ckpts_path=ckpts_path,
@@ -238,9 +234,12 @@ def get_data_loaders(
                                      ds_train_facescape])
     dl_train = DataLoader(
         ds_train,
-        shuffle=True,
-        batch_size=batch_size,
         num_workers=num_workers,
+        batch_sampler=concat.ConcatBatchSampler(
+            concat_dataset=ds_train,
+            batch_size=batch_size,
+            shuffle=True,
+        )
     )
 
     # Validation data loaders
@@ -284,21 +283,8 @@ if __name__ == '__main__':
         help='The path to load model checkpoint weights from.'
     )
     parser.add_argument(
-        '--save_unique', action='store_true',
-        help=(
-            'If set, the created checkpoint(s) will get a unique name '
-            'containing its WandB run ID.'
-        )
-    )
-    parser.add_argument(
-        '--save_best', action='store_true',
-        help='If set, save a checkpoint containg the weights with the best '
-        'performance, as defined by --best_metric and --higher_is_better.'
-    )
-    parser.add_argument(
-        '--save_last', action='store_true',
-        help='If set, save a checkpoint containing the weights of the last '
-        'epoch.'
+        '--no_save_ckpts', action='store_true',
+        help='If set, don\'t save checkpoints during training.'
     )
     parser.add_argument(
         '--best_metric', default='L2',
@@ -401,20 +387,25 @@ if __name__ == '__main__':
                         type=float)
     parser.add_argument('--beta1', default=0.95, help='The beta1 of AdamW.',
                         type=float)
-    parser.add_argument('--beta2', default=0.95, help='The beta2 of AdamW.',
+    parser.add_argument('--beta2', default=0.999, help='The beta2 of AdamW.',
                         type=float)
     parser.add_argument('--weight_decay', default=0,
                         help='The weight decay.',
                         type=float)
-    parser.add_argument('--lr_warmup_steps', default=1, help='The number of '
+    parser.add_argument('--lr_warmup_steps', default=100, help='The number of '
                         'learning rate warmup steps.',
                         type=int)
 
     # Train args
     parser.add_argument(
-        '--num_epochs', default=500,
+        '--num_epochs', default=30,
         help='The number of epochs to train.',
         type=int
+    )
+    parser.add_argument(
+        '--val_every', default=1000,
+        help='Run a validation epoch after this number of iterations.',
+        type=int,
     )
 
     # Log args

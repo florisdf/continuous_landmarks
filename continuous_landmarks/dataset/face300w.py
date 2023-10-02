@@ -36,7 +36,7 @@ class Face300WDataset(Dataset):
         img = row['image']
         points = row['keypoints']
 
-        im = Image.open(img)
+        im = Image.open(img).convert('RGB')
 
         if self.transform is not None:
             im, points = self.transform(im, points)

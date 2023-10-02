@@ -29,12 +29,13 @@ class LandmarkPredictor(nn.Module):
             query = query_sequence.flatten(end_dim=1)
             feature = feature[:, None, :].expand(-1, N, -1).flatten(end_dim=1)
 
-            out = self.model(query, feature)
-            out = out.unflatten(0, (B, N))
+            lm_pred, var_pred = self.model(query, feature)
+            lm_pred = lm_pred.unflatten(0, (B, N))
+            var_pred = var_pred.unflatten(0, (B, N))
         else:
-            out = self.model(query_sequence, feature)
+            lm_pred, var_pred = self.model(query_sequence, feature)
 
-        return out
+        return lm_pred, var_pred
 
 
 class MLPLandmarkPredictor(nn.Module):
@@ -63,7 +64,10 @@ class MLPLandmarkPredictor(nn.Module):
 
     def forward(self, query, feature):
         x = torch.cat([query, feature], dim=1)
-        return self.model(x)
+        out = self.model(x)
+        lm_pred = out[..., :2]
+        var_pred = torch.exp(out[..., 2])
+        return lm_pred, var_pred
 
 
 class TransformerLandmarkPredictor(nn.Module):
@@ -112,6 +116,9 @@ class TransformerLandmarkPredictor(nn.Module):
             tokens = xca_block(tokens, H, W)
 
         # Pass tokens to post-layer to get sequence of predicted landmarks
-        pred = self.post_layer(tokens.flatten(end_dim=1)).unflatten(0, (B, N))
+        out = self.post_layer(tokens.flatten(end_dim=1)).unflatten(0, (B, N))
 
-        return pred
+        lm_pred = out[..., :2]
+        var_pred = torch.exp(out[..., 2])
+
+        return lm_pred, var_pred
