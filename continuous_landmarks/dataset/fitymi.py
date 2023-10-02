@@ -4,6 +4,7 @@ import numpy as np
 from PIL import Image
 import torch
 from torch.utils.data import Dataset
+import pandas as pd
 
 from .facescape import LANDMARKS_300W
 
@@ -14,11 +15,15 @@ class FITYMIDataset(Dataset):
         transform=None,
         canon_shape_file='facescape_mouth_stretch.pth',
     ):
-        self.data = [
-            (p.parent / f'{p.name.replace("_ldmks.txt", ".png")}',
-             parse_points(p))
-            for p in data_path.glob('*_ldmks.txt')
-        ]
+        self.df = pd.DataFrame([
+            {
+                'image': p,
+                'label': p.stem,
+                'keypoints_path': p.parent / f'{p.stem}_ldmks.txt',
+            }
+            for p in data_path.glob('*.png')
+            if '_seg' not in p.stem
+        ])
         self.transform = transform
 
         canonical_shape = torch.load(Path(__file__).parent / canon_shape_file)
@@ -28,17 +33,19 @@ class FITYMIDataset(Dataset):
         self.canonical = torch.cat([canonical, e0[None, ...], e1[None, ...]])
 
     def __len__(self):
-        return len(self.data)
+        return len(self.df)
 
     def __getitem__(self, idx):
-        img, points = self.data[idx]
+        row = self.df.iloc[idx]
+        img = row.image
+        points = parse_points(row.keypoints_path)
 
         im = Image.open(img)
 
         if self.transform is not None:
             im, points = self.transform(im, points)
 
-        return im, points
+        return im, points, self.canonical
 
 
 def parse_points(file_path):

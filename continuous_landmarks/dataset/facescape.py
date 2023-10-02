@@ -59,6 +59,7 @@ class FaceScapeLandmarkDataset(Dataset):
                     'expression': p.parent.name,
                     'view': int(p.stem),
                     'subject': int(p.parent.parent.name),
+                    'label': p.parent.parent.name,
                 }
                 for p in
                 (data_path / 'fsmview_trainset')
@@ -82,7 +83,7 @@ class FaceScapeLandmarkDataset(Dataset):
         if self.transform is not None:
             im, points = self.transform(im, points)
 
-        return im, points
+        return im, points, self.canonical
 
 
 class FaceScapeTUDataset(Dataset):

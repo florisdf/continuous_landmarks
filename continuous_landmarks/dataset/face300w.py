@@ -5,6 +5,8 @@ import re
 import torch
 from torch.utils.data import Dataset
 
+import pandas as pd
+
 from .facescape import LANDMARKS_300W
 
 
@@ -14,26 +16,32 @@ class Face300WDataset(Dataset):
         transform=None,
         canon_shape_file='facescape_mouth_stretch.pth',
     ):
-        self.data = [
-            (p.parent / f'{p.stem}.png', parse_points(p))
+        self.df = pd.DataFrame([
+            {
+                'image': p.parent / f'{p.stem}.png',
+                'label': p.stem,
+                'keypoints': parse_points(p)
+            }
             for p in data_path.glob('*/*.pts')
-        ]
+        ])
         self.transform = transform
         canonical_shape = torch.load(Path(__file__).parent / canon_shape_file)
         self.canonical = canonical_shape[LANDMARKS_300W]
 
     def __len__(self):
-        return len(self.data)
+        return len(self.df)
 
     def __getitem__(self, idx):
-        img, points = self.data[idx]
+        row = self.df.iloc[idx]
+        img = row['image']
+        points = row['keypoints']
 
         im = Image.open(img)
 
         if self.transform is not None:
             im, points = self.transform(im, points)
 
-        return im, points
+        return im, points, self.canonical
 
 
 def parse_points(file_path):
