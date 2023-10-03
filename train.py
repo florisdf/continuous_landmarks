@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 import wandb
 
 from continuous_landmarks.dataset import face300w, facescape, fitymi, concat
-from continuous_landmarks.model import FeatureExtractor, LandmarkPredictor,\
+from continuous_landmarks.model import FeatureExtractor, LandmarkPredictor, \
     PositionEncoder
 from continuous_landmarks.utils.kfold import kfold_split
 from continuous_landmarks.dataset.transforms import (
@@ -40,6 +40,8 @@ def run_training(
     random_saturation,
     norm_mean,
     norm_std,
+    max_train_samples,
+    max_val_samples,
 
     # Ckpt
     load_ckpt,
@@ -81,6 +83,7 @@ def run_training(
             input_size, rrc_scale, rrc_ratio,
             random_angle, random_brightness, random_contrast,
             random_saturation, norm_mean, norm_std,
+            max_train_samples, max_val_samples
         )
 
     device = torch.device(device)
@@ -145,6 +148,7 @@ def get_data_loaders(
     input_size, rrc_scale, rrc_ratio,
     random_angle, random_brightness, random_contrast,
     random_saturation, norm_mean, norm_std,
+    max_train_samples, max_val_samples
 ):
     common_train_tfms = [
         RandomResizedCrop(input_size, scale=rrc_scale, ratio=rrc_ratio),
@@ -186,6 +190,8 @@ def get_data_loaders(
         Align(face300w.get_eyes_mouth),
         *common_val_tfms
     ])
+    shuffle_limit_dataset(ds_train_300w, max_train_samples)
+    shuffle_limit_dataset(ds_val_300w, max_val_samples)
 
     # Set up FITYMI
     data_path_fitymi = Path(data_path_fitymi)
@@ -206,6 +212,8 @@ def get_data_loaders(
         Align(fitymi.get_eyes_mouth),
         *common_val_tfms
     ])
+    shuffle_limit_dataset(ds_train_fitymi, max_train_samples)
+    shuffle_limit_dataset(ds_val_fitymi, max_val_samples)
 
     # Set up FaceScape
     data_path_facescape = Path(data_path_facescape)
@@ -226,13 +234,8 @@ def get_data_loaders(
         Align(facescape.get_eyes_mouth),
         *common_val_tfms
     ])
-    ds_train_facescape.df = ds_train_facescape.df.sample(
-        min(len(ds_train_fitymi), len(ds_train_facescape))
-    ).reset_index(drop=True)
-    ds_val_facescape.df = ds_val_facescape.df.sample(
-        min(len(ds_val_fitymi), len(ds_val_facescape)),
-        random_state=42,
-    ).reset_index(drop=True)
+    shuffle_limit_dataset(ds_train_facescape, max_train_samples)
+    shuffle_limit_dataset(ds_val_facescape, max_val_samples)
 
     # Create training set by concatenating the different training sets
     ds_train = concat.ConcatDataset([ds_train_300w, ds_train_fitymi,
@@ -265,6 +268,16 @@ def get_data_loaders(
     )
 
     return dl_train, dl_val_300w, dl_val_fitymi, dl_val_facescape
+
+
+def shuffle_limit_dataset(dataset, max_number, seed=42):
+    """
+    Shuffle the dataset samples and limit the number of samples in the dataset.
+    """
+    dataset.df = dataset.df.sample(
+        min(max_number, len(dataset)),
+        random_state=seed,
+    ).reset_index(drop=True)
 
 
 if __name__ == '__main__':
@@ -379,6 +392,15 @@ if __name__ == '__main__':
     parser.add_argument(
         '--norm_std', default=[0.2, 0.2, 0.2],
         help='Image normalization std'
+    )
+    parser.add_argument(
+        '--max_train_samples', default=100000,
+        help='The maximum number of training samples to use for each dataset.'
+    )
+    parser.add_argument(
+        '--max_val_samples', default=1000,
+        help='The maximum number of validation samples to use for each '
+        'dataset.'
     )
 
     # Dataloader args
