@@ -119,7 +119,7 @@ class TrainingLoop:
 
             d = self.training_steps.on_after_validation_epoch()
             ds_name = ds.__class__.__name__
-            log(d, epoch_idx=self.train_batch_idx,
+            log(d, epoch_idx=self.epoch_idx, batch_idx=self.train_batch_idx,
                 section=f'Val{ds_name}')
             log_dicts[ds_name] = d
 
