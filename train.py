@@ -45,6 +45,7 @@ def run_training(
     load_ckpt,
     no_save_ckpts,
     best_metric,
+    best_metric_ds,
     higher_is_better,
     ckpts_path,
 
@@ -130,6 +131,7 @@ def run_training(
         val_every=val_every,
         save_ckpts=not no_save_ckpts,
         best_metric=best_metric,
+        best_metric_ds=best_metric_ds,
         higher_is_better=higher_is_better,
         ckpts_path=ckpts_path,
     )
@@ -293,6 +295,11 @@ if __name__ == '__main__':
         '--best_metric', default='GaussianNLL',
         help='If this metric improves, create a checkpoint '
         '(when --save_best is set).'
+    )
+    parser.add_argument(
+        '--best_metric_ds', default='FaceScapeLandmarkDataset',
+        help='Create a checkpoint when the metric set with --best_metric '
+        'improves for this dataset'
     )
     parser.add_argument(
         '--higher_is_better', action='store_true',

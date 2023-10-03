@@ -6,7 +6,7 @@ from tqdm import tqdm
 import wandb
 
 from .training_steps import TrainingSteps
-from ..dataset.transforms import Compose, Normalize,\
+from ..dataset.transforms import Compose, Normalize, \
     AbsToRelLdmks, RelToAbsLdmks
 
 
@@ -23,6 +23,7 @@ class TrainingLoop:
         val_every,
         save_ckpts,
         best_metric,
+        best_metric_ds,
         higher_is_better,
         ckpts_path,
     ):
@@ -33,8 +34,6 @@ class TrainingLoop:
         self.dl_train = dl_train
         self.dl_val_list = dl_val_list
 
-        self.minmax_metrics = {}
-        self.ckpts_path = Path(ckpts_path)
         self.val_every = val_every
 
         self.device = device
@@ -44,8 +43,11 @@ class TrainingLoop:
         self.train_batch_idx = -1
 
         self.save_ckpts = save_ckpts
-        self.best_metric = best_metric
+        self.ckpts_path = Path(ckpts_path)
 
+        self.best_metric_name = best_metric
+        self.best_metric_value = None
+        self.best_metric_ds = best_metric_ds
         self.higher_is_better = higher_is_better
 
     def run(self):
@@ -62,14 +64,6 @@ class TrainingLoop:
 
             log_dict = self.training_steps.on_after_training_epoch()
             log(log_dict, epoch_idx=self.epoch_idx, section='Train')
-
-            # Create iteration checkpoints
-            if self.save_ckpts:
-                self.create_checkpoints(
-                    is_last=True,
-                    is_best=self.metric_improved(log_dict),
-                    is_epoch=False,
-                )
 
         # Create epoch checkpoint
         if self.save_ckpts:
@@ -98,7 +92,7 @@ class TrainingLoop:
             epoch_idx=self.epoch_idx,
             batch_idx=self.train_batch_idx)
 
-        if (self.train_batch_idx + 1) % self.val_every == 0:
+        if self.train_batch_idx % self.val_every == 0:
             self.run_validation_epochs()
 
         if torch.isnan(loss):
@@ -107,6 +101,7 @@ class TrainingLoop:
     def run_validation_epochs(self):
         self.model.eval()
 
+        log_dicts = {}
         for dl_val in self.dl_val_list:
             self.training_steps.on_before_validation_epoch()
             ds = dl_val.dataset
@@ -123,27 +118,18 @@ class TrainingLoop:
                     )
 
             d = self.training_steps.on_after_validation_epoch()
+            ds_name = ds.__class__.__name__
             log(d, epoch_idx=self.train_batch_idx,
-                section=f'Val{ds.__class__.__name__}')
+                section=f'Val{ds_name}')
+            log_dicts[ds_name] = d
 
-    def update_minmax_metrics(self, val_log_dict):
-        for k, v in val_log_dict.items():
-            if isinstance(v, wandb.Histogram) or isinstance(v, wandb.Object3D):
-                continue
-
-            max_name = f'Max{k}'
-            if (
-                max_name not in self.minmax_metrics
-                or v > self.minmax_metrics[max_name]
-            ):
-                self.minmax_metrics[max_name] = v
-
-            min_name = f'Min{k}'
-            if (
-                min_name not in self.minmax_metrics
-                or v < self.minmax_metrics[min_name]
-            ):
-                self.minmax_metrics[min_name] = v
+        # Create checkpoints
+        if self.save_ckpts:
+            self.create_checkpoints(
+                is_last=True,
+                is_best=self.metric_improved(log_dicts[self.best_metric_ds]),
+                is_epoch=False,
+            )
 
     def create_checkpoints(self, is_last, is_best, is_epoch,
                            epoch_idx=None):
@@ -173,12 +159,19 @@ class TrainingLoop:
             )
 
     def metric_improved(self, val_log_dict):
-        v = val_log_dict[self.best_metric]
+        v = val_log_dict[self.best_metric_name]
 
-        if self.higher_is_better:
-            return v >= self.minmax_metrics[f'Max{self.best_metric}']
+        if self.best_metric_value is None:
+            self.best_metric_value = v
+            return True
+        elif self.higher_is_better and v >= self.best_metric_value:
+            self.best_metric_value = v
+            return True
+        elif not self.higher_is_better and v <= self.best_metric_value:
+            self.best_metric_value = v
+            return True
         else:
-            return v <= self.minmax_metrics[f'Min{self.best_metric}']
+            return False
 
 
 def log(log_dict, epoch_idx, batch_idx=None, section=None):
