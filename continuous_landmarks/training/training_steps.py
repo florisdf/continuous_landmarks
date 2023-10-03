@@ -72,7 +72,8 @@ class TrainingSteps:
                                        range(self.max_logged_ims)):
                 img, lm_pred = inv_tfm(img.cpu(), lm_pred.cpu())
                 im = to_pil_image(img)
-                im = draw_points(im, lm_pred)
+                point_size = 1 if len(lm_pred) > 100 else 3
+                im = draw_points(im, lm_pred, point_size)
                 self.val_ims.append(
                     wandb.Image(im.resize(self.img_log_size))
                 )
