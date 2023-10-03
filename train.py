@@ -26,7 +26,8 @@ def run_training(
     lm_model,
 
     # Dataset
-    data_path_300w,
+    data_path_300w_train,
+    data_path_300w_val,
     data_path_fitymi,
     data_path_facescape,
 
@@ -77,7 +78,8 @@ def run_training(
 ):
     dl_train, dl_val_300w, dl_val_fitymi, dl_val_facescape = \
         get_data_loaders(
-            data_path_300w, data_path_fitymi, data_path_facescape,
+            data_path_300w_train, data_path_300w_val, data_path_fitymi,
+            data_path_facescape,
             k_fold_num_folds, k_fold_val_fold, k_fold_seed,
             batch_size, val_batch_size, num_workers,
             input_size, rrc_scale, rrc_ratio,
@@ -142,7 +144,8 @@ def run_training(
 
 
 def get_data_loaders(
-    data_path_300w, data_path_fitymi, data_path_facescape,
+    data_path_300w_train, data_path_300w_val, data_path_fitymi,
+    data_path_facescape,
     k_fold_num_folds, k_fold_val_fold, k_fold_seed,
     batch_size, val_batch_size, num_workers,
     input_size, rrc_scale, rrc_ratio,
@@ -172,24 +175,22 @@ def get_data_loaders(
     ]
 
     # Set up 300W
-    data_path_300w = Path(data_path_300w)
+    data_path_300w_train = Path(data_path_300w_train)
     ds_train_300w = face300w.Face300WDataset(
-        data_path=data_path_300w,
+        data_path=data_path_300w_train,
         transform=Compose([
             Align(face300w.get_eyes_mouth),
             *common_train_tfms
         ]),
     )
-    ds_train_300w, ds_val_300w = kfold_split(
-        ds_train_300w,
-        k=k_fold_num_folds,
-        val_fold=k_fold_val_fold,
-        seed=k_fold_seed,
+    data_path_300w_val = Path(data_path_300w_val)
+    ds_val_300w = face300w.Face300WDataset(
+        data_path=data_path_300w_val,
+        transform=Compose([
+            Align(face300w.get_eyes_mouth),
+            *common_val_tfms
+        ]),
     )
-    ds_val_300w.transform = Compose([
-        Align(face300w.get_eyes_mouth),
-        *common_val_tfms
-    ])
     shuffle_limit_dataset(ds_train_300w, max_train_samples)
     shuffle_limit_dataset(ds_val_300w, max_val_samples)
 
@@ -344,8 +345,12 @@ if __name__ == '__main__':
 
     # Dataset
     parser.add_argument(
-        '--data_path_300w', default='/apollo/datasets/300W',
-        help='Path to the 300W dataset.',
+        '--data_path_300w_train', default='/apollo/datasets/300W-train',
+        help='Path to the 300W training dataset.',
+    )
+    parser.add_argument(
+        '--data_path_300w_val', default='/apollo/datasets/300W-test',
+        help='Path to the 300W validation dataset.',
     )
     parser.add_argument(
         '--data_path_fitymi', default='/apollo/datasets/FITYMI',
