@@ -5,6 +5,7 @@ from torchvision.transforms.functional import to_pil_image
 import wandb
 
 from ..utils.draw_points import draw_points
+from ..metrics.nme import normalized_mean_error
 
 
 class TrainingSteps:
@@ -29,6 +30,7 @@ class TrainingSteps:
         self.img_log_size = img_log_size
 
         self.val_losses = []
+        self.val_nmes = []
         self.val_ims = []
 
     def on_before_training_epoch(self):
@@ -64,10 +66,10 @@ class TrainingSteps:
     def on_validation_step(self, batch, batch_idx, inv_tfm):
         lm_pred_batch, loss = self._get_pred_and_loss(batch)
         self.val_losses.append(loss)
+        img_batch, lm_true_batch, _ = batch
 
         if len(self.val_ims) < self.max_logged_ims:
             # Log images with LM preds
-            img_batch, *_ = batch
             for img, lm_pred, _ in zip(img_batch, lm_pred_batch,
                                        range(self.max_logged_ims)):
                 img, lm_pred = inv_tfm(img.cpu(), lm_pred.cpu())
@@ -77,6 +79,11 @@ class TrainingSteps:
                 self.val_ims.append(
                     wandb.Image(im.resize(self.img_log_size))
                 )
+        try:
+            nme = normalized_mean_error(lm_pred_batch, lm_true_batch)
+            self.val_nmes.extend(nme.cpu())
+        except AssertionError:
+            pass
 
     def on_after_validation_epoch(self):
         log_dict = {
@@ -84,7 +91,11 @@ class TrainingSteps:
             'Images': self.val_ims,
         }
 
+        if len(self.val_nmes) > 0:
+            log_dict['NME'] = torch.tensor(self.val_nmes).mean()
+
         self.val_losses.clear()
+        self.val_nmes.clear()
         self.val_ims = []
 
         return log_dict
