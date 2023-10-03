@@ -134,7 +134,7 @@ class RelToAbsLdmks:
         """
         Convert points to absolute coordinates: [-1, 1] -> [0, S]
         """
-        img_size = max(img.shape)
+        img_size = max(img.shape[-2:])
         points = points + 1
         points /= 2
         points *= img_size

@@ -1,6 +1,3 @@
-import torch
-
-
 def normalized_mean_error(pred_points, true_points):
     """
     Compute the Normalized Mean Error of the predicted points.
@@ -10,21 +7,14 @@ def normalized_mean_error(pred_points, true_points):
     the eyes. See also https://ibug.doc.ic.ac.uk/resources/300-W/.
     """
 
-    if true_points.ndim == 2:
-        assert true_points.shape[0] == 68
-    elif true_points.ndim == 3:
-        assert true_points.shape[1] == 68
-    else:
-        raise ValueError(f'Unexpected shape {true_points.shape}')
+    num_of_images, num_of_points, num_coords = true_points.shape
+    assert num_of_points == 68
 
-    inter_ocular_dist = torch.linalg.vector_norm(
-        true_points[..., 36, :] - true_points[..., 45, :],
-        dim=-1
-    )
-    eucl_dists = torch.linalg.vector_norm(
-        pred_points - true_points,
-        dim=-1
-    )
-    mean_eucl_dists = eucl_dists.mean(dim=-1)
+    inter_ocular_dist = (
+        true_points[..., 36, :] - true_points[..., 45, :]
+    ).pow(2).sum(dim=-1).sqrt()
+    dists_sum = (
+        pred_points - true_points
+    ).pow(2).sum(dim=-1).sqrt().sum(dim=-1)
 
-    return mean_eucl_dists / inter_ocular_dist
+    return dists_sum / (num_of_points * inter_ocular_dist)
