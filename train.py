@@ -98,17 +98,15 @@ def run_training(
         model_name=lm_model,
     )
 
-    if load_ckpt is not None:
-        state_dicts = torch.load(load_ckpt)
-        pos_encoder.load_state_dict(state_dicts['PositionEncoder'])
-        feat_extractor.load_state_dict(state_dicts['FeatureExtractor'])
-        lm_predictor.load_state_dict(state_dicts['LandmarkPredictor'])
-
     training_steps = TrainingSteps(
         pos_encoder=pos_encoder,
         feat_extractor=feat_extractor,
         lm_predictor=lm_predictor,
     )
+
+    if load_ckpt is not None:
+        state_dict = torch.load(load_ckpt)
+        training_steps.model.load_state_dict(state_dict)
 
     optimizer = AdamW(
         chain(pos_encoder.parameters(),
