@@ -3,17 +3,16 @@ import numpy as np
 from numpy.linalg import norm
 
 
-def align_face(
-    img, landmarks,
+def get_matrix_and_size(
     eye_0, eye_1, mouth_0, mouth_1
 ):
     r90 = np.array([
         [0, 1],
         [-1, 0]
     ])
-    landmarks, eye_0, eye_1, mouth_0, mouth_1 = map(
+    eye_0, eye_1, mouth_0, mouth_1 = map(
         np.array,
-        [landmarks, eye_0, eye_1, mouth_0, mouth_1]
+        [eye_0, eye_1, mouth_0, mouth_1]
     )
 
     xp = eye_1 - eye_0
@@ -35,6 +34,17 @@ def align_face(
     rot = cv2.getRotationMatrix2D(np.zeros(2), -theta, 1)
     M = rot @ np.vstack((shift, [0, 0, 1]))
 
+    return M, s
+
+
+def align_face(
+    img, landmarks,
+    eye_0, eye_1, mouth_0, mouth_1
+):
+    landmarks = np.array(landmarks)    
+    M, s = get_matrix_and_size(
+        eye_0, eye_1, mouth_0, mouth_1
+    )
     aligned_img = cv2.warpAffine(img, M, (int(s), int(s)))
     aligned_lms = np.hstack([landmarks, np.ones(len(landmarks))[:, None]]) @ M.T
 
